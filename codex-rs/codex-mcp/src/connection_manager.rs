@@ -594,9 +594,10 @@ impl McpConnectionManager {
 
     pub async fn resolve_tool_info(&self, tool_name: &ToolName) -> Option<ToolInfo> {
         let all_tools = self.list_all_tools().await;
-        all_tools
-            .into_values()
-            .find(|tool| tool.canonical_tool_name() == *tool_name)
+        all_tools.into_values().find(|tool| {
+            let canonical = tool.canonical_tool_name();
+            canonical == *tool_name || canonical.display() == tool_name.display()
+        })
     }
 
     async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {

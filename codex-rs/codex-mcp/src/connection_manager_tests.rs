@@ -697,6 +697,10 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
         .resolve_tool_info(&ToolName::namespaced("mcp__rmcp__", "echo"))
         .await
         .expect("split MCP tool namespace and name should resolve");
+    let plain_tool = manager
+        .resolve_tool_info(&ToolName::plain("mcp__rmcp__echo"))
+        .await
+        .expect("plain canonical MCP tool name should resolve");
 
     let expected = ("rmcp", "mcp__rmcp__", "echo", "echo");
     assert_eq!(
@@ -705,6 +709,15 @@ async fn resolve_tool_info_accepts_canonical_namespaced_tool_names() {
             tool.callable_namespace.as_str(),
             tool.callable_name.as_str(),
             tool.tool.name.as_ref(),
+        ),
+        expected
+    );
+    assert_eq!(
+        (
+            plain_tool.server_name.as_str(),
+            plain_tool.callable_namespace.as_str(),
+            plain_tool.callable_name.as_str(),
+            plain_tool.tool.name.as_ref(),
         ),
         expected
     );

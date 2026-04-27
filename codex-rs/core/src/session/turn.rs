@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -95,7 +96,9 @@ use codex_protocol::protocol::ReasoningRawContentDeltaEvent;
 use codex_protocol::protocol::TurnDiffEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::user_input::UserInput;
+use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespaceTool;
+use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use codex_tools::filter_tool_suggest_discoverable_tools_for_client;
@@ -961,6 +964,15 @@ pub(crate) fn build_prompt(
             .filter_map(|spec| filter_deferred_dynamic_tool_spec(spec, &deferred_dynamic_tools))
             .collect()
     };
+    let tools = if turn_context
+        .config
+        .model_provider_id
+        .eq_ignore_ascii_case("openrouter")
+    {
+        flatten_namespaced_tools_for_openrouter(tools)
+    } else {
+        tools
+    };
 
     Prompt {
         input,
@@ -972,6 +984,92 @@ pub(crate) fn build_prompt(
         output_schema_strict: !crate::guardian::is_guardian_reviewer_source(
             &turn_context.session_source,
         ),
+    }
+}
+
+fn flatten_namespaced_tools_for_openrouter(tools: Vec<ToolSpec>) -> Vec<ToolSpec> {
+    tools
+        .into_iter()
+        .flat_map(|spec| match spec {
+            ToolSpec::Function(tool) => vec![ToolSpec::Function(
+                normalize_function_tool_for_openrouter(tool),
+            )],
+            ToolSpec::Namespace(namespace) => {
+                let namespace_name = namespace.name;
+                namespace
+                    .tools
+                    .into_iter()
+                    .map(move |tool| match tool {
+                        ResponsesApiNamespaceTool::Function(mut tool) => {
+                            tool.name =
+                                ToolName::namespaced(namespace_name.as_str(), tool.name).display();
+                            ToolSpec::Function(normalize_function_tool_for_openrouter(tool))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
+            spec => vec![spec],
+        })
+        .collect()
+}
+
+fn normalize_function_tool_for_openrouter(mut tool: ResponsesApiTool) -> ResponsesApiTool {
+    if tool.parameters.schema_type.is_none() {
+        tool.parameters = JsonSchema::object(BTreeMap::new(), Some(Vec::new()), Some(false.into()));
+    }
+    tool
+}
+
+#[cfg(test)]
+mod openrouter_tool_tests {
+    use super::*;
+    use codex_tools::ResponsesApiNamespace;
+
+    fn function_tool(name: &str) -> ResponsesApiTool {
+        ResponsesApiTool {
+            name: name.to_string(),
+            description: "test tool".to_string(),
+            strict: false,
+            defer_loading: None,
+            parameters: JsonSchema::default(),
+            output_schema: None,
+        }
+    }
+
+    #[test]
+    fn flattens_namespaced_mcp_tools_for_openrouter() {
+        let tools = flatten_namespaced_tools_for_openrouter(vec![
+            ToolSpec::Function(function_tool("shell_command")),
+            ToolSpec::Namespace(ResponsesApiNamespace {
+                name: "mcp__cua__".to_string(),
+                description: "CUA tools".to_string(),
+                tools: vec![
+                    ResponsesApiNamespaceTool::Function(function_tool("screenshot")),
+                    ResponsesApiNamespaceTool::Function(function_tool("click")),
+                ],
+            }),
+        ]);
+
+        assert_eq!(tools.len(), 3);
+        assert_eq!(tools[0].name(), "shell_command");
+        assert_eq!(tools[1].name(), "mcp__cua__screenshot");
+        assert_eq!(tools[2].name(), "mcp__cua__click");
+    }
+
+    #[test]
+    fn fills_empty_function_parameters_for_openrouter() {
+        let tools =
+            flatten_namespaced_tools_for_openrouter(vec![ToolSpec::Function(function_tool("noop"))]);
+
+        let ToolSpec::Function(tool) = &tools[0] else {
+            panic!("expected function tool");
+        };
+        assert!(tool.parameters.schema_type.is_some());
+        assert_eq!(tool.parameters.required.as_deref(), Some(&[][..]));
+        assert_eq!(
+            tool.parameters.additional_properties,
+            Some(false.into())
+        );
     }
 }
 
