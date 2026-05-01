@@ -12,6 +12,15 @@ use tempfile::TempDir;
 const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
 const APPLY_PATCH_ARG0: &str = "apply_patch";
 const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
+// Windows-only: the shim is a real `.exe` (hardlink or copy of codex.exe)
+// instead of a `.bat`. PowerShell/cmd resolve `apply_patch` via PATHEXT to
+// `apply_patch.exe` and spawn it via CreateProcessW directly — bypassing
+// cmd.exe's `%*` re-tokenization (which corrupts patch chars like `<`/`>`/
+// `(`/`)`/`&`/`|`) and the cmd 8191-char command-line cap.
+#[cfg(windows)]
+const APPLY_PATCH_EXE_ARG0: &str = "apply_patch.exe";
+#[cfg(windows)]
+const MISSPELLED_APPLY_PATCH_EXE_ARG0: &str = "applypatch.exe";
 #[cfg(unix)]
 const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
@@ -83,6 +92,15 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
         // Safety: [`run_main`] never returns.
         codex_linux_sandbox::run_main();
     } else if exe_name == APPLY_PATCH_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_ARG0 {
+        codex_apply_patch::main();
+    }
+
+    // Windows: the apply_patch alias ships as `apply_patch.exe` (hardlink
+    // of codex.exe). When PowerShell/cmd spawn it, the dispatch sees
+    // argv[0] with the `.exe` extension. Match those forms too so the
+    // standalone executable is reached the same way as the Unix symlink.
+    #[cfg(windows)]
+    if exe_name == APPLY_PATCH_EXE_ARG0 || exe_name == MISSPELLED_APPLY_PATCH_EXE_ARG0 {
         codex_apply_patch::main();
     }
 
@@ -214,8 +232,13 @@ where
 /// Creates a temporary directory with either:
 ///
 /// - UNIX: `apply_patch` symlink to the current executable
-/// - WINDOWS: `apply_patch.bat` batch script to invoke the current executable
-///   with the "secret" --codex-run-as-apply-patch flag.
+/// - WINDOWS: `apply_patch.exe` hardlink of the current executable (with copy
+///   fallback if hardlink fails — e.g., cross-volume or a filesystem that
+///   doesn't support hardlinks). PowerShell/cmd resolve `apply_patch` via
+///   PATHEXT to `apply_patch.exe` and spawn it via CreateProcessW directly,
+///   bypassing cmd.exe entirely. The child process then runs through the
+///   normal `argv[0]` dispatch (matching `apply_patch.exe`) and reaches the
+///   standalone executable, which reads the patch from argv[1] or stdin.
 ///
 /// This temporary directory is prepended to the PATH environment variable so
 /// that `apply_patch` can be on the PATH without requiring the user to
@@ -290,16 +313,20 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
 
         #[cfg(windows)]
         {
-            let batch_script = path.join(format!("{filename}.bat"));
-            std::fs::write(
-                &batch_script,
-                format!(
-                    r#"@echo off
-"{}" {CODEX_CORE_APPLY_PATCH_ARG1} %*
-"#,
-                    exe.display()
-                ),
-            )?;
+            // Hardlink (or copy fallback) codex.exe -> apply_patch.exe so
+            // that PowerShell/cmd spawn it via CreateProcessW directly,
+            // bypassing the cmd.exe %* re-tokenization and 8191-char cap
+            // that broke the previous .bat shim. The hardlink keeps disk
+            // overhead near zero; copy is the safety net for cross-volume
+            // installs.
+            //
+            // The dispatch above matches `apply_patch.exe` so the child
+            // process enters the standalone apply_patch executable just
+            // like the Unix symlink path does.
+            let link = path.join(format!("{filename}.exe"));
+            if std::fs::hard_link(&exe, &link).is_err() {
+                std::fs::copy(&exe, &link)?;
+            }
         }
     }
 
