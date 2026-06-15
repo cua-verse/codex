@@ -125,7 +125,11 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.0.0"
+# agenthle fork build version (semver prerelease). Distinguishes our build from
+# stock and from older fork builds (which reported plain 0.0.0), so the deployer
+# can detect a stale baked binary via `codex --version` and re-download. Still
+# contains "0.0.0" so any legacy substring checks keep working.
+version = "0.0.0-agenthle-20260614"
 # Track the edition for all workspace crates in one place. Individual
 # crates can still override this value, but keeping it here means new
 # crates created with `cargo new -w ...` automatically inherit the 2024
