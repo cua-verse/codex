@@ -45,6 +45,25 @@ pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {
     }
 }
 
+/// OpenRouter-facing flattened MCP tool name with the canonical
+/// `mcp__<server>__<tool>` shape (exactly one `__` between namespace and tool).
+/// OpenRouter rejects the Responses-API namespaced-tool grouping, so MCP tools
+/// are flattened into plain function tools using this name (see
+/// `session::turn::flatten_namespaced_tools_for_openrouter`). Mirrors
+/// `handlers::mcp::join_tool_name` so the dispatch fallback can map the model's
+/// flat call back to the namespaced registry key. (`flat_tool_name` above just
+/// concatenates and would drop the delimiter — unusable as a wire name.)
+pub(crate) fn mcp_delimited_tool_name(tool_name: &ToolName) -> String {
+    match tool_name.namespace.as_deref() {
+        Some(namespace) => {
+            let ns = namespace.trim_end_matches('_');
+            let name = tool_name.name.trim_start_matches('_');
+            format!("{ns}__{name}")
+        }
+        None => tool_name.name.clone(),
+    }
+}
+
 pub(crate) fn tool_user_shell_type(
     user_shell: &crate::shell::Shell,
 ) -> codex_tools::ToolUserShellType {

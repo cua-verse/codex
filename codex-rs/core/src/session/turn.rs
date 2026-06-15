@@ -105,6 +105,7 @@ use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiNamespaceTool;
 use codex_tools::ResponsesApiTool;
 use codex_tools::ToolName;
+use codex_tools::ToolSpec;
 use codex_tools::filter_request_plugin_install_discoverable_tools_for_client;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
@@ -1052,8 +1053,9 @@ fn flatten_namespaced_tools_for_openrouter(tools: Vec<ToolSpec>) -> Vec<ToolSpec
                     .into_iter()
                     .map(move |tool| match tool {
                         ResponsesApiNamespaceTool::Function(mut tool) => {
-                            tool.name =
-                                ToolName::namespaced(namespace_name.as_str(), tool.name).display();
+                            tool.name = crate::tools::mcp_delimited_tool_name(
+                                &ToolName::namespaced(namespace_name.as_str(), tool.name),
+                            );
                             ToolSpec::Function(normalize_function_tool_for_openrouter(tool))
                         }
                     })

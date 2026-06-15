@@ -358,6 +358,20 @@ impl ToolRegistry {
         self.tools.get(name).map(Arc::clone)
     }
 
+    /// Resolve a plain, flattened MCP tool name (`mcp__server__tool`) back to its
+    /// namespaced registry key. OpenRouter can't accept the Responses-API
+    /// namespaced-tool grouping, so MCP tools are flattened into plain function
+    /// tools (see `session::turn::flatten_namespaced_tools_for_openrouter`); the
+    /// model then calls them by the flat name with no namespace, which never
+    /// matches the namespaced `ToolName` key directly. Match by the canonical
+    /// delimited name instead. Returns None for non-MCP / ambiguous names.
+    fn resolve_flat_mcp_name(&self, flat: &str) -> Option<ToolName> {
+        self.tools
+            .keys()
+            .find(|k| k.namespace.is_some() && crate::tools::mcp_delimited_tool_name(k) == flat)
+            .cloned()
+    }
+
     #[cfg(test)]
     pub(crate) fn tool_names_for_test(&self) -> Vec<ToolName> {
         let mut names = self.tools.keys().cloned().collect::<Vec<_>>();
@@ -405,6 +419,14 @@ impl ToolRegistry {
         mut invocation: ToolInvocation,
         terminal_outcome_reached: Option<Arc<AtomicBool>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        // OpenRouter flattened MCP calls arrive as a plain `mcp__server__tool`
+        // name (no namespace) and won't match the namespaced registry key —
+        // remap them to the canonical namespaced name before dispatch.
+        if invocation.tool_name.namespace.is_none() && self.tool(&invocation.tool_name).is_none() {
+            if let Some(resolved) = self.resolve_flat_mcp_name(&invocation.tool_name.name) {
+                invocation.tool_name = resolved;
+            }
+        }
         let tool_name = invocation.tool_name.clone();
         let tool_name_flat = flat_tool_name(&tool_name);
         let call_id_owned = invocation.call_id.clone();
